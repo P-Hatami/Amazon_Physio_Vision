@@ -1,0 +1,80 @@
+import cv2
+import numpy as np
+import winsound
+import datetime
+import csv
+import os
+
+# 1. Logging
+log_file = "physio_vision_logs.csv"
+if not os.path.exists(log_file):
+    with open(log_file, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(["Timestamp", "Event_Type", "Status"])
+
+def log_event(event_type):
+    with open(log_file, 'a', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), event_type, "Recorded"])
+
+# 2. UI Grid
+def draw_ui(frame):
+    h, w, _ = frame.shape
+    for i in range(0, w, 100):
+        cv2.line(frame, (i, 0), (i, h), (0, 255, 0), 1, cv2.LINE_AA)
+    for i in range(0, h, 100):
+        cv2.line(frame, (0, i), (w, i), (0, 255, 0), 1, cv2.LINE_AA)
+    cv2.putText(frame, "Fire TV Cam | CALIBRATED", (w - 250, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
+
+cap = cv2.VideoCapture(0)
+ret, frame1 = cap.read()
+ret, frame2 = cap.read()
+
+alarm_active = False
+
+while cap.isOpened():
+    diff = cv2.absdiff(frame1, frame2)
+    gray = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, thresh = cv2.threshold(blur, 20, 255, cv2.THRESH_BINARY)
+    dilated = cv2.dilate(thresh, None, iterations=3)
+    contours, _ = cv2.findContours(dilated, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+    current_fall = False
+    current_standing = False
+
+    for contour in contours:
+        if cv2.contourArea(contour) > 8000:
+            x, y, w, h = cv2.boundingRect(contour)
+            if w > h * 1.3:
+                cv2.rectangle(frame1, (x, y), (x+w, y+h), (0, 0, 255), 2)
+                current_fall = True
+            elif h > w * 1.1:
+                cv2.rectangle(frame1, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                current_standing = True
+
+    # 3. Recovery Detection & State Management
+    if current_fall and not alarm_active:
+        alarm_active = True
+        log_event("CRITICAL: Fall Detected")
+    elif current_standing and alarm_active:
+        alarm_active = False
+        log_event("INFO: Recovery (Stand Up)")
+
+    draw_ui(frame1)
+
+    if alarm_active:
+        cv2.putText(frame1, "ALERT: FALL DETECTED!", (50, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+        winsound.Beep(1000, 200)
+    else:
+        cv2.putText(frame1, "Monitoring...", (50, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+    cv2.imshow("Amazon Fire TV - Physio-Vision", frame1)
+    frame1 = frame2
+    ret, frame2 = cap.read()
+
+    if cv2.waitKey(10) == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
